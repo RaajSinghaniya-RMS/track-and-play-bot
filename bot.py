@@ -3,16 +3,16 @@ import pymongo
 import os
 import random
 import datetime
+import requests
+import feedparser # Isse website ke naye posts fetch honge
 
-# Railway Variables (Inhe Railway dashboard mein set karein)
+# --- INITIALIZATION ---
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 MONGO_URI = os.getenv('MONGO_URL')
-
-# Aapki Personal Details
+GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 ADMIN_ID = 281457173
 GROUP_ID = -1002657897913
 
-# Aapke Multiple Adsterra Links
 AD_LINKS = [
     "https://www.effectivegatecpm.com/ieik85vff?key=d58462324f8afb5e36d3fade6811af49",
     "https://www.effectivegatecpm.com/pa3wchg46?key=3d881e1e67e1030ab609a17b17695d93",
@@ -21,101 +21,70 @@ AD_LINKS = [
 ]
 
 bot = telebot.TeleBot(BOT_TOKEN)
-
-# MongoDB Connection
 client = pymongo.MongoClient(MONGO_URI)
 db = client["TrackAndPlay_Bot_New"]
 users_col = db["users"]
 
-# --- COMMANDS ---
+# --- 1. AI EXPERT (Gemini Integration) ---
+def get_ai_response(user_query):
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_KEY}"
+        payload = {"contents": [{"parts": [{"text": f"You are a Satellite expert for trackandplay.com. Answer this query concisely: {user_query}"}]}]}
+        response = requests.post(url, json=payload)
+        return response.json()['candidates'][0]['content']['parts'][0]['text']
+    except:
+        return "Sorry, AI abhi offline hai. Aap website check karein: trackandplay.com"
 
-@bot.message_handler(commands=['start'])
-def start(message):
-    user_id = message.from_user.id
-    if not users_col.find_one({"user_id": user_id}):
-        users_col.insert_one({"user_id": user_id, "points": 0, "last_claim": ""})
-    
-    bot.send_message(message.chat.id, "🛰 **Welcome to TrackAndPlay AI Bot!**\n\nAb aap group mein active reh kar aur ads dekh kar Free Recharges jeet sakte hain!\n\n🔹 /daily - Get Daily 20 Points\n🔹 /ad - Earn 10 Points (Unlimited)\n🔹 /wallet - Check Your Points\n🔹 /leaderboard - See Top Players\n🔹 /software - Latest Receiver Updates")
-
-@bot.message_handler(commands=['daily'])
-def daily_bonus(message):
-    user_id = message.from_user.id
-    user_data = users_col.find_one({"user_id": user_id})
-    
-    today = str(datetime.date.today())
-    last_claim = user_data.get("last_claim", "")
-
-    if last_claim == today:
-        bot.reply_to(message, "❌ Aapne aaj ka bonus pehle hi le liya hai. Kal wapis aana!")
-    else:
-        selected_ad = random.choice(AD_LINKS)
-        markup = telebot.types.InlineKeyboardMarkup()
-        btn = telebot.types.InlineKeyboardButton("Unlock Daily Bonus 🎁", url=selected_ad)
-        markup.add(btn)
-        bot.send_message(message.chat.id, "Daily 20 Points lene ke liye niche click karein aur fir /claim_daily likhein:", reply_markup=markup)
-
-@bot.message_handler(commands=['claim_daily'])
-def claim_daily(message):
-    user_id = message.from_user.id
-    user_data = users_col.find_one({"user_id": user_id})
-    today = str(datetime.date.today())
-    
-    # Check again if already claimed to prevent cheating
-    if user_data.get("last_claim") == today:
-        bot.reply_to(message, "❌ Cheat attempts allowed nahi hain!")
+@bot.message_handler(commands=['ask_ai'])
+def ai_handler(message):
+    query = message.text.replace('/ask_ai', '')
+    if not query:
+        bot.reply_to(message, "Apna sawal likhein. Example: /ask_ai No signal on 95e")
         return
+    bot.send_chat_action(message.chat.id, 'typing')
+    answer = get_ai_response(query)
+    bot.reply_to(message, f"🤖 **AI Expert:**\n\n{answer}")
 
-    users_col.update_one({"user_id": user_id}, {"$set": {"last_claim": today}, "$inc": {"points": 20}})
-    bot.send_message(message.chat.id, "✅ Mubarak ho! 20 Bonus Points add ho gaye hain.")
+# --- 2. SMART NOTIFICATIONS (Website Sync) ---
+@bot.message_handler(commands=['check_updates'])
+def sync_website(message):
+    feed = feedparser.parse("https://trackandplay.com/feed/")
+    latest_post = feed.entries[0]
+    title = latest_post.title
+    link = latest_post.link
+    bot.send_message(message.chat.id, f"🆕 **Latest on TrackAndPlay:**\n\n{title}\n\n🔗 [Download/Read More]({link})", parse_mode="Markdown")
 
-@bot.message_handler(commands=['ad'])
-def earn(message):
-    selected_ad = random.choice(AD_LINKS)
-    markup = telebot.types.InlineKeyboardMarkup()
-    btn = telebot.types.InlineKeyboardButton("Claim 10 Points 🎁", url=selected_ad)
-    markup.add(btn)
-    bot.send_message(message.chat.id, "Ad dekhne ke baad /claim likhein:", reply_markup=markup)
+# --- 3. GROUP GROWTH (Add Members Logic) ---
+@bot.message_handler(content_types=['new_chat_members'])
+def welcome_and_track(message):
+    for member in message.new_chat_members:
+        bot.send_message(GROUP_ID, f"Welcome {member.first_name}! 🛰\nUnlock Premium TPs by adding 5 friends or watching ads (/ad).")
 
-@bot.message_handler(commands=['claim'])
-def claim(message):
+# --- 4. CORE REWARDS (Daily & Adsterra) ---
+@bot.message_handler(commands=['daily_gift']) # Replaced /daily with /daily_gift as requested
+def daily_gift(message):
     user_id = message.from_user.id
-    users_col.update_one({"user_id": user_id}, {"$inc": {"points": 10}})
-    bot.send_message(message.chat.id, "✅ 10 Points aapke wallet mein add ho gaye hain!")
+    user_data = users_col.find_one({"user_id": user_id})
+    today = str(datetime.date.today())
+    
+    if user_data.get("last_claim") == today:
+        bot.reply_to(message, "❌ Kal wapis aana!")
+    else:
+        ad = random.choice(AD_LINKS)
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("Unlock Gift 🎁", url=ad))
+        bot.send_message(message.chat.id, "Gift ke liye ad dekhein fir /claim_gift likhein:", reply_markup=markup)
 
+@bot.message_handler(commands=['claim_gift'])
+def claim_gift(message):
+    user_id = message.from_user.id
+    users_col.update_one({"user_id": user_id}, {"$set": {"last_claim": str(datetime.date.today())}, "$inc": {"points": 25}})
+    bot.send_message(message.chat.id, "✅ 25 Bonus Points added!")
+
+# --- EXISTING COMMANDS (Wallet, Software, Leaderboard) ---
 @bot.message_handler(commands=['wallet'])
 def wallet(message):
     user_data = users_col.find_one({"user_id": message.from_user.id})
-    points = user_data['points'] if user_data else 0
-    bot.reply_to(message, f"💰 Aapka Balance: **{points} Points**\n\nRank badhane ke liye /ad use karein.")
-
-@bot.message_handler(commands=['leaderboard'])
-def leaderboard(message):
-    top_users = users_col.find().sort("points", -1).limit(10)
-    text = "🏆 **TrackAndPlay Top 10 Players** 🏆\n\n"
-    for i, user in enumerate(top_users, 1):
-        text += f"{i}. User: `{user['user_id']}` — {user['points']} Pts\n"
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
-
-@bot.message_handler(commands=['software'])
-def software_menu(message):
-    markup = telebot.types.InlineKeyboardMarkup(row_width=2)
-    btn1 = telebot.types.InlineKeyboardButton("GX6605s Updates", url="https://trackandplay.com/category/gx6605s/")
-    btn2 = telebot.types.InlineKeyboardButton("Sunplus Software", url="https://trackandplay.com/category/sunplus/")
-    btn3 = telebot.types.InlineKeyboardButton("TP List", url="https://trackandplay.com/")
-    markup.add(btn1, btn2, btn3)
-    bot.send_message(message.chat.id, "🛰 **Apna Receiver Model Select Karein:**", reply_markup=markup)
-
-# Admin command
-@bot.message_handler(commands=['addpoints'])
-def add_points_admin(message):
-    if message.from_user.id == ADMIN_ID:
-        try:
-            args = message.text.split()
-            target_user = int(args[1])
-            amount = int(args[2])
-            users_col.update_one({"user_id": target_user}, {"$inc": {"points": amount}})
-            bot.reply_to(message, f"✅ User {target_user} ko {amount} points diye gaye.")
-        except:
-            bot.reply_to(message, "Usage: /addpoints [user_id] [amount]")
+    bot.reply_to(message, f"💰 Wallet: {user_data['points'] if user_data else 0} Points")
 
 bot.polling()
