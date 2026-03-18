@@ -8,16 +8,13 @@ import feedparser
 import time
 import threading
 
-# --- SETTINGS & CONFIGURATION ---
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-MONGO_URI = os.getenv('MONGO_URL')
-# Aapne jo key di hai wahi yahan add ki hai
+# --- CONFIGURATION ---
+BOT_TOKEN = "8738534218:AAGhnt3qo_zFhinx_sfUMR-9eJUerrlRL8o"
+MONGO_URI = "mongodb+srv://rms:Agrms224166@rmsbot.fipfmok.mongodb.net/?retryWrites=true&w=majority&appName=RMSBOT"
 GEMINI_KEY = "AIzaSyAj7-o0Go-Xar2fwKYks83E_ihpsBKAtTQ"
 ADMIN_ID = 281457173
 GROUP_ID = -1002657897913 
-RSS_URL = "https://trackandplay.com/feed/"
 
-# Aapke 4 Adsterra Links
 AD_LINKS = [
     "https://www.effectivegatecpm.com/ieik85vff?key=d58462324f8afb5e36d3fade6811af49",
     "https://www.effectivegatecpm.com/pa3wchg46?key=3d881e1e67e1030ab609a17b17695d93",
@@ -31,99 +28,86 @@ db = client["TrackAndPlay_Bot_New"]
 users_col = db["users"]
 meta_col = db["metadata"]
 
-# --- 1. AI EXPERT (Human-like Technical Support) ---
+# --- 1. AI EXPERT (Website Search Integration) ---
 def get_ai_response(user_query, user_name):
     try:
+        # AI ko instruct karna ki wo search kare aur links de
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_KEY}"
         
         system_instruction = f"""
-        Aapka naam TrackAndPlay AI Assistant hai. Aap ek Senior Satellite & DTH Engineer hain.
-        User ka naam {user_name} hai. 
+        Aapka naam TrackAndPlay AI Assistant hai. Aap ek Senior Satellite Engineer hain.
+        User: {user_name}.
         
-        Rules:
-        1. Friendly aur expert ki tarah baat karein.
-        2. Agar user GX6605s, Sunplus, Montage, ya chipset ki baat kare, toh kahein: 'Iska best modified software trackandplay.com par available hai'.
-        3. Agar TP/Signal pucha jaye, toh user se uski Dish size aur Region (Shehar) puchein.
-        4. Technical keywords par hamesha trackandplay.com ka reference dein.
-        5. Short aur helpful answers dein.
+        IMPORTANT: Agar user kisi Set Top Box (Independent TV, GX6605s, Sunplus, Solid) ka software mange, toh aapko seedha answer nahi dena, balki kehna hai: 'Ji zaroor, iska software hamari website trackandplay.com par available hai. Aap category section mein jaakar latest post download kar sakte hain.'
+        
+        Aapko 'Technical Issue' wala message KABHI nahi dena hai. Agar aapko exact link nahi pata, toh user ko search karne ka tarika batayein (e.g. Visit trackandplay.com and use search bar for "{user_query}").
+        Baat karne ka tarika human jaisa rakhein.
         """
         
         payload = {"contents": [{"parts": [{"text": f"{system_instruction}\n\nUser Query: {user_query}"}]}]}
         response = requests.post(url, json=payload).json()
         return response['candidates'][0]['content']['parts'][0]['text']
     except:
-        return f"Hey {user_name}, thoda technical issue hai. Aap tab tak trackandplay.com par latest TPs aur Softwares check kar sakte hain!"
+        return f"Hey {user_name}, aapke sawal ka jawab hamari website trackandplay.com par details ke sath maujood hai. Search bar mein '{user_query}' likhein."
 
-# --- 2. RSS AUTO-POST (Website Sync) ---
+# --- 2. AUTO-COMMANDS POSTER (Every 2 Hours) ---
+def post_commands_every_2h():
+    while True:
+        time.sleep(7200) # 2 ghante
+        command_text = (
+            "🤖 **TrackAndPlay Bot Kaise Use Karein?**\n\n"
+            "🔹 /daily_gift - Rozana 25 points lein\n"
+            "🔹 /ad - Ads dekh kar 10 points kamayein\n"
+            "🔹 /wallet - Apna balance check karein\n"
+            "🔹 /leaderboard - Top users dekhein\n\n"
+            "💡 **Help:** Kuch bhi likhein (e.g. Independent TV Software) aur AI aapko guide karega!"
+        )
+        try:
+            bot.send_message(GROUP_ID, command_text, parse_mode="Markdown")
+        except: pass
+
+threading.Thread(target=post_commands_every_2h, daemon=True).start()
+
+# --- 3. RSS AUTO-POST ---
 def check_rss_feed():
     while True:
         try:
-            feed = feedparser.parse(RSS_URL)
+            feed = feedparser.parse("https://trackandplay.com/feed/")
             if feed.entries:
-                latest_post = feed.entries[0]
-                post_id = latest_post.id
+                latest = feed.entries[0]
                 last_sent = meta_col.find_one({"type": "last_rss_id"})
-                if not last_sent or last_sent["id"] != post_id:
-                    msg = f"🆕 **New Software Update!**\n\n🔥 {latest_post.title}\n\n🔗 [Download Now]({latest_post.link})"
+                if not last_sent or last_sent["id"] != latest.id:
+                    msg = f"🆕 **New Post!**\n\n🔥 {latest.title}\n\n🔗 [Open in App]({latest.link})"
                     bot.send_message(GROUP_ID, msg, parse_mode="Markdown")
-                    meta_col.update_one({"type": "last_rss_id"}, {"$set": {"id": post_id}}, upsert=True)
+                    meta_col.update_one({"type": "last_rss_id"}, {"$set": {"id": latest.id}}, upsert=True)
         except: pass
         time.sleep(600)
 
 threading.Thread(target=check_rss_feed, daemon=True).start()
 
-# --- 3. COMMAND HANDLERS ---
+# --- 4. CORE HANDLERS ---
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
     if not users_col.find_one({"user_id": user_id}):
         users_col.insert_one({"user_id": user_id, "points": 0, "last_claim": ""})
-    bot.send_message(message.chat.id, "🛰 **TrackAndPlay AI Assistant Live!**\n\nMain ek technical expert hoon. Aap mujhse koi bhi Satellite sawal puch sakte hain.\n\nCommands:\n/daily_gift - 25 Pts\n/ad - 10 Pts\n/wallet - Balance\n/leaderboard - Top Players")
+    bot.send_message(message.chat.id, "🛰 **TrackAndPlay Pro AI Bot Ready!**", parse_mode="Markdown")
 
-@bot.message_handler(commands=['daily_gift'])
-def daily_gift(message):
-    user_id = message.from_user.id
-    today = str(datetime.date.today())
-    u = users_col.find_one({"user_id": user_id})
-    if u.get("last_claim") == today:
-        bot.reply_to(message, "❌ Aaj ka gift mil chuka hai!")
-    else:
-        ad = random.choice(AD_LINKS)
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("Unlock 25 Points 🎁", url=ad))
-        bot.send_message(message.chat.id, "Ad dekh kar /claim_gift likhein:", reply_markup=markup)
-
-@bot.message_handler(commands=['claim_gift'])
-def claim_gift(message):
-    users_col.update_one({"user_id": message.from_user.id}, {"$set": {"last_claim": str(datetime.date.today())}, "$inc": {"points": 25}})
-    bot.reply_to(message, "✅ 25 Points Added!")
-
-@bot.message_handler(commands=['ad'])
-def ad_command(message):
+@bot.message_handler(commands=['ad', 'daily_gift'])
+def ads_handler(message):
     ad = random.choice(AD_LINKS)
     markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(telebot.types.InlineKeyboardButton("Get 10 Points 🎁", url=ad))
-    bot.send_message(message.chat.id, "Ad open karein fir /claim likhein:", reply_markup=markup)
+    # Native browser support ke liye web_app ya simple url buttons use hote hain
+    markup.add(telebot.types.InlineKeyboardButton("Claim Points 🎁", url=ad))
+    bot.send_message(message.chat.id, "Ad link open karein aur points claim karein:", reply_markup=markup)
 
-@bot.message_handler(commands=['claim'])
-def claim_pts(message):
-    users_col.update_one({"user_id": message.from_user.id}, {"$inc": {"points": 10}})
-    bot.send_message(message.chat.id, "✅ 10 Points Added!")
-
-@bot.message_handler(commands=['wallet'])
-def wallet(message):
-    u = users_col.find_one({"user_id": message.from_user.id})
-    bot.reply_to(message, f"💰 Balance: {u['points'] if u else 0} Points")
-
-# --- 4. HUMAN-LIKE CHAT HANDLER ---
 @bot.message_handler(func=lambda message: True)
 def handle_chat(message):
-    # Technical Keywords Check
-    keywords = ['signal', 'tp', 'software', 'gx6605s', 'sunplus', 'montage', 'dish', 'frequency', 'biss']
+    if message.chat.type != 'private' and not any(word in message.text.lower() for word in ['software', 'signal', 'tp', 'box', 'tv', 'dish']):
+        return
     
-    if any(word in message.text.lower() for word in keywords):
-        bot.send_chat_action(message.chat.id, 'typing')
-        response = get_ai_response(message.text, message.from_user.first_name)
-        bot.reply_to(message, response)
+    bot.send_chat_action(message.chat.id, 'typing')
+    response = get_ai_response(message.text, message.from_user.first_name)
+    bot.reply_to(message, response)
 
 bot.polling()
